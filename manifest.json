@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "Import the current Chess.com game into Lichess with one click.",
   "permissions": ["storage", "tabs"],
-  "host_permissions": ["https://www.chess.com/*"],
+  "host_permissions": ["https://www.chess.com/*", "https://lichess.org/*"],
   "background": {
     "service_worker": "service-worker.js"
   },
@@ -18,6 +18,11 @@
         "https://www.chess.com/game/live/*"
       ],
       "js": ["chess-com.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://lichess.org/paste*"],
+      "js": ["lichess.js"],
       "run_at": "document_idle"
     }
   ]

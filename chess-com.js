@@ -2,7 +2,13 @@ const SELECTORS = {
   shareButton: 'button[data-cy="sidebar-share-icon"]',
   shareModal: '[data-cy="share-menu-modal"]',
   pgnTab: 'button[data-cy="pgn-tab-button"]',
-  pgnTextarea: '[data-cy="share-menu-modal"] textarea[aria-label="PGN"]'
+  pgnTextarea: '[data-cy="share-menu-modal"] textarea[aria-label="PGN"]',
+  modalCloseButtons: [
+    '[data-cy="share-menu-modal"] button[aria-label="Close"]',
+    '[data-cy="share-menu-modal"] button[aria-label="close"]',
+    '[data-cy="share-menu-modal"] [data-cy="modal-close-button"]',
+    '[data-cy="share-menu-modal"] .cc-modal-close-button'
+  ]
 };
 
 let lastReportedReady = null;
@@ -113,8 +119,36 @@ async function extractPgn() {
   return pgn;
 }
 
+async function closeShareModal() {
+  const modal = document.querySelector(SELECTORS.shareModal);
+
+  if (!modal) {
+    return;
+  }
+
+  for (const selector of SELECTORS.modalCloseButtons) {
+    const closeButton = document.querySelector(selector);
+
+    if (closeButton instanceof HTMLElement) {
+      closeButton.click();
+
+      if (!(await waitForElement(SELECTORS.shareModal, 400))) {
+        return;
+      }
+    }
+  }
+
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', bubbles: true }));
+
+  await wait(100);
+}
+
 async function startImport() {
   const pgn = await extractPgn();
+
+  await closeShareModal();
+
   const response = await chrome.runtime.sendMessage({
     type: 'OPEN_LICHESS_IMPORT',
     pgn,

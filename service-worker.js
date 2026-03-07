@@ -2,7 +2,7 @@ const READY_BADGE_TEXT = 'PGN';
 const READY_BADGE_COLOR = '#2e7d32';
 const ERROR_BADGE_TEXT = '!';
 const ERROR_BADGE_COLOR = '#c62828';
-const RELAY_PAGE = 'relay.html';
+const LICHESS_PASTE_URL = 'https://lichess.org/paste';
 
 function isSupportedChessUrl(url) {
   if (!url) {
@@ -113,9 +113,38 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
       });
 
-      const relayUrl = chrome.runtime.getURL(`${RELAY_PAGE}?id=${encodeURIComponent(importId)}`);
-      await chrome.tabs.create({ url: relayUrl });
+      await chrome.tabs.create({
+        url: `${LICHESS_PASTE_URL}#chesscom-import=${encodeURIComponent(importId)}`
+      });
 
+      sendResponse({ ok: true });
+      return;
+    }
+
+    if (message?.type === 'GET_PENDING_IMPORT') {
+      const importId = message.importId;
+
+      if (!importId) {
+        sendResponse({ ok: false, error: 'Missing import id.' });
+        return;
+      }
+
+      const storageKey = `pending-import:${importId}`;
+      const result = await chrome.storage.session.get(storageKey);
+      sendResponse({ ok: true, pendingImport: result[storageKey] || null });
+      return;
+    }
+
+    if (message?.type === 'CLEAR_PENDING_IMPORT') {
+      const importId = message.importId;
+
+      if (!importId) {
+        sendResponse({ ok: false, error: 'Missing import id.' });
+        return;
+      }
+
+      const storageKey = `pending-import:${importId}`;
+      await chrome.storage.session.remove(storageKey);
       sendResponse({ ok: true });
       return;
     }
