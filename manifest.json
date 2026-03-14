@@ -9,7 +9,7 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "permissions": ["storage", "tabs"],
+  "permissions": ["storage", "tabs", "scripting"],
   "host_permissions": ["https://www.chess.com/*", "https://lichess.org/*"],
   "background": {
     "service_worker": "service-worker.js"

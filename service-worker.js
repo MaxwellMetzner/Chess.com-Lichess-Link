@@ -1,5 +1,7 @@
 const READY_BADGE_TEXT = 'PGN';
 const READY_BADGE_COLOR = '#2e7d32';
+const RETRY_BADGE_TEXT = '↺';
+const RETRY_BADGE_COLOR = '#f9a825';
 const ERROR_BADGE_TEXT = '!';
 const ERROR_BADGE_COLOR = '#c62828';
 const LICHESS_PASTE_URL = 'https://lichess.org/paste';
@@ -14,6 +16,7 @@ function isSupportedChessUrl(url) {
 
 async function clearBadge(tabId) {
   await chrome.action.setBadgeText({ tabId, text: '' });
+  await chrome.action.setBadgeTextColor?.({ tabId, color: '#ffffff' });
   await chrome.action.setTitle({
     tabId,
     title: 'Import Chess.com game to Lichess'
@@ -21,6 +24,7 @@ async function clearBadge(tabId) {
 }
 
 async function setReadyBadge(tabId) {
+  await chrome.action.setBadgeTextColor?.({ tabId, color: '#ffffff' });
   await chrome.action.setBadgeBackgroundColor({
     tabId,
     color: READY_BADGE_COLOR
@@ -32,7 +36,21 @@ async function setReadyBadge(tabId) {
   });
 }
 
+async function setRetryBadge(tabId, title) {
+  await chrome.action.setBadgeTextColor?.({ tabId, color: '#1f1f1f' });
+  await chrome.action.setBadgeBackgroundColor({
+    tabId,
+    color: RETRY_BADGE_COLOR
+  });
+  await chrome.action.setBadgeText({ tabId, text: RETRY_BADGE_TEXT });
+  await chrome.action.setTitle({
+    tabId,
+    title: title || 'PGN is not ready yet. Click to try importing again.'
+  });
+}
+
 async function setErrorBadge(tabId, title) {
+  await chrome.action.setBadgeTextColor?.({ tabId, color: '#ffffff' });
   await chrome.action.setBadgeBackgroundColor({
     tabId,
     color: ERROR_BADGE_COLOR
@@ -44,6 +62,38 @@ async function setErrorBadge(tabId, title) {
   });
 }
 
+function isMissingReceiverError(error) {
+  return /receiving end does not exist/i.test(error?.message || '');
+}
+
+function isRetryableImportError(message) {
+  return /share button was not found|share modal did not open|pgn tab was not found|pgn text field was not found|pgn text was empty/i.test(
+    message || ''
+  );
+}
+
+async function ensureChessContentScript(tabId) {
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: ['chess-com.js']
+  });
+}
+
+async function sendChessTabMessage(tabId, message, options = {}) {
+  const { injectOnMissingReceiver = false } = options;
+
+  try {
+    return await chrome.tabs.sendMessage(tabId, message);
+  } catch (error) {
+    if (!injectOnMissingReceiver || !isMissingReceiverError(error)) {
+      throw error;
+    }
+
+    await ensureChessContentScript(tabId);
+    return chrome.tabs.sendMessage(tabId, message);
+  }
+}
+
 async function refreshTabStatus(tabId, url) {
   if (!isSupportedChessUrl(url)) {
     await clearBadge(tabId);
@@ -51,17 +101,17 @@ async function refreshTabStatus(tabId, url) {
   }
 
   try {
-    const response = await chrome.tabs.sendMessage(tabId, { type: 'GET_STATUS' });
+    const response = await sendChessTabMessage(tabId, { type: 'GET_STATUS' });
 
     if (response?.ready) {
       await setReadyBadge(tabId);
       return;
     }
   } catch {
-    // Ignore missing content script during navigation.
+    // Fall through to the retry state for supported pages.
   }
 
-  await clearBadge(tabId);
+  await setRetryBadge(tabId);
 }
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -94,7 +144,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.ready) {
         await setReadyBadge(tabId);
       } else {
-        await clearBadge(tabId);
+        await setRetryBadge(tabId);
       }
 
       sendResponse({ ok: true });
@@ -174,15 +224,33 @@ chrome.action.onClicked.addListener(async tab => {
   }
 
   try {
-    const response = await chrome.tabs.sendMessage(tab.id, { type: 'START_IMPORT' });
+    const response = await sendChessTabMessage(
+      tab.id,
+      { type: 'START_IMPORT' },
+      { injectOnMissingReceiver: true }
+    );
 
     if (!response?.ok) {
-      await setErrorBadge(tab.id, response?.error || 'Could not extract PGN from the page');
+      const errorMessage = response?.error || 'Could not extract PGN from the page';
+
+      if (isRetryableImportError(errorMessage)) {
+        await setRetryBadge(tab.id, errorMessage);
+        return;
+      }
+
+      await setErrorBadge(tab.id, errorMessage);
       return;
     }
 
     await setReadyBadge(tab.id);
   } catch (error) {
-    await setErrorBadge(tab.id, error?.message || 'Could not reach the Chess.com page');
+    const errorMessage = error?.message || 'Could not reach the Chess.com page';
+
+    if (isRetryableImportError(errorMessage)) {
+      await setRetryBadge(tab.id, errorMessage);
+      return;
+    }
+
+    await setErrorBadge(tab.id, errorMessage);
   }
 });

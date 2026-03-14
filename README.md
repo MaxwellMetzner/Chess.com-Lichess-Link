@@ -5,9 +5,10 @@ Chrome extension that detects supported Chess.com game pages and imports the cur
 ## How it works
 
 1. On a Chess.com game page, the content script watches for the Share button.
-2. When the button is available, the extension badge shows `PGN`.
-3. Clicking the extension action opens the Share modal, switches to the PGN tab, reads the PGN text directly from the page, closes the modal, and opens `https://lichess.org/paste` with an import token in the URL hash.
-4. A Lichess content script running on the real page fills the PGN textarea and submits the site form in-page, which redirects to the imported Lichess game.
+2. While the game page is supported but the PGN is not ready yet, the extension badge shows `↺` as a retry state.
+3. When the PGN can be imported, the badge shows `PGN`.
+4. Clicking the extension action always tries to read the PGN again, even if the page was loaded earlier or the content script needs to be reattached.
+5. If the import succeeds, the extension opens `https://lichess.org/paste` with an import token in the URL hash, and a Lichess content script fills the PGN form and submits it in-page.
 
 This avoids using the clipboard, avoids requiring a Lichess API token, avoids cross-origin POST failures from extension pages, and avoids matching the game through Chess.com's monthly archive API.
 
