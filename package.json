@@ -1,6 +1,6 @@
 {
   "name": "chess-com-lichess-link",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Chrome extension that imports the current Chess.com game into Lichess.",
   "scripts": {

@@ -1,7 +1,10 @@
 (() => {
   const HASH_PREFIX = '#chesscom-import=';
-  const PGN_TEXTAREA_SELECTOR = 'textarea[name="pgn"]';
-  const IMPORT_FORM_SELECTOR = 'main form[action="/import"]';
+  const PGN_TEXTAREA_SELECTORS = [
+    'textarea[name="pgn"]',
+    'textarea[aria-label*="PGN" i]',
+    'main textarea'
+  ] as const;
 
   function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null;
@@ -12,7 +15,8 @@
       isRecord(value) &&
       typeof value.pgn === 'string' &&
       typeof value.sourceUrl === 'string' &&
-      typeof value.createdAt === 'number'
+      typeof value.createdAt === 'number' &&
+      (value.orientation === 'white' || value.orientation === 'black')
     );
   }
 
@@ -42,23 +46,48 @@
     });
   }
 
-  async function waitForElement<TElement extends Element>(
-    selector: string,
-    timeoutMs = 5000
-  ): Promise<TElement | null> {
+  async function waitForPgnTextarea(timeoutMs = 5000): Promise<HTMLTextAreaElement | null> {
     const startTime = Date.now();
 
     while (Date.now() - startTime < timeoutMs) {
-      const element = document.querySelector<TElement>(selector);
+      for (const selector of PGN_TEXTAREA_SELECTORS) {
+        const textarea = document.querySelector<HTMLTextAreaElement>(selector);
 
-      if (element) {
-        return element;
+        if (textarea) {
+          return textarea;
+        }
       }
 
       await wait(100);
     }
 
     return null;
+  }
+
+  function findImportForm(textarea: HTMLTextAreaElement): HTMLFormElement | null {
+    return (
+      textarea.closest<HTMLFormElement>('form') ??
+      Array.from(document.forms).find(form => form.contains(textarea)) ??
+      null
+    );
+  }
+
+  function findSubmitter(
+    form: HTMLFormElement
+  ): HTMLButtonElement | HTMLInputElement | undefined {
+    const candidates = form.querySelectorAll<HTMLButtonElement | HTMLInputElement>(
+      'button[type="submit"], input[type="submit"]'
+    );
+
+    for (const candidate of candidates) {
+      const label = `${candidate.textContent ?? ''} ${candidate.value} ${candidate.getAttribute('aria-label') ?? ''}`;
+
+      if (/import/i.test(label)) {
+        return candidate;
+      }
+    }
+
+    return candidates[0];
   }
 
   function setTextareaValue(textarea: HTMLTextAreaElement, value: string): void {
@@ -82,10 +111,15 @@
         return;
       }
 
-      const form = await waitForElement<HTMLFormElement>(IMPORT_FORM_SELECTOR, 5000);
-      const textarea = await waitForElement<HTMLTextAreaElement>(PGN_TEXTAREA_SELECTOR, 5000);
+      const textarea = await waitForPgnTextarea(5000);
 
-      if (!form || !textarea) {
+      if (!textarea) {
+        return;
+      }
+
+      const form = findImportForm(textarea);
+
+      if (!form) {
         return;
       }
 
@@ -106,7 +140,7 @@
       } satisfies ClearPendingImportMessage);
 
       window.history.replaceState({}, document.title, window.location.pathname);
-      form.requestSubmit();
+      form.requestSubmit(findSubmitter(form));
     } catch {
       return;
     }

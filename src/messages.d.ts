@@ -1,7 +1,10 @@
+type BoardOrientation = 'white' | 'black';
+
 interface PendingImport {
   pgn: string;
   sourceUrl: string;
   createdAt: number;
+  orientation: BoardOrientation;
 }
 
 interface GetStatusRequest {
@@ -23,6 +26,7 @@ interface OpenLichessImportMessage {
   type: 'OPEN_LICHESS_IMPORT';
   pgn: string;
   sourceUrl: string;
+  orientation: BoardOrientation;
 }
 
 interface GetPendingImportMessage {

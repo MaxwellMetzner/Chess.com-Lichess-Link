@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Chess.com to Lichess Import",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "description": "Import the current Chess.com game into Lichess with one click.",
   "icons": {
     "16": "icons/icon16.png",
@@ -27,7 +27,9 @@
     {
       "matches": [
         "https://www.chess.com/game/*",
-        "https://www.chess.com/game/live/*"
+        "https://www.chess.com/game/live/*",
+        "https://www.chess.com/analysis/game/*",
+        "https://www.chess.com/analysis/game/live/*"
       ],
       "js": ["dist/chess-com.js"],
       "run_at": "document_idle"

@@ -1,16 +1,53 @@
 (() => {
   const SELECTORS = {
-    shareButton: 'button[data-cy="sidebar-share-icon"]',
-    shareModal: '[data-cy="share-menu-modal"]',
-    pgnTab: 'button[data-cy="pgn-tab-button"]',
-    pgnTextarea: '[data-cy="share-menu-modal"] textarea[aria-label="PGN"]',
+    shareButtons: [
+      'button[data-cy="sidebar-share-icon"]',
+      '[data-cy="analysis-secondary-controls-menu-open-share"]',
+      'button[aria-label="Share"]',
+      'button[aria-label="Share game"]',
+      'button.share-button-component.icon-share',
+      'button.share-button-component.share',
+      '#shareMenuButton'
+    ],
+    secondaryMenuButtons: [
+      '.game-controls-secondary-more > button',
+      '.game-controls-secondary-button > button',
+      '[data-cy="analysis-secondary-controls-menu-open"]'
+    ],
+    shareModals: [
+      '[data-cy="share-menu-modal"]',
+      'dialog:has(.share-menu-content)',
+      'dialog:has(.share-menu-tab-pgn-component)',
+      '[role="dialog"]:has(textarea[aria-label="PGN"])',
+      '[role="dialog"]:has(textarea[name="pgn"])'
+    ],
+    pgnTabs: [
+      'button[data-cy="pgn-tab-button"]',
+      '#tab-pgn',
+      '#live_ShareMenuGlobalDialogDownloadButton',
+      '#chessboard_ShareMenuGlobalDialogDownloadButton'
+    ],
+    pgnTextareas: [
+      '[data-cy="share-menu-modal"] textarea[aria-label="PGN"]',
+      '.share-menu-tab-pgn-textarea',
+      '#live_ShareMenuPgnContentTextareaId',
+      '#chessboard_ShareMenuPgnContentTextareaId',
+      'textarea[name="pgn"]',
+      'textarea[aria-label="PGN"]'
+    ],
     modalCloseButtons: [
       '[data-cy="share-menu-modal"] button[aria-label="Close"]',
       '[data-cy="share-menu-modal"] button[aria-label="close"]',
-      '[data-cy="share-menu-modal"] [data-cy="modal-close-button"]',
-      '[data-cy="share-menu-modal"] .cc-modal-close-button'
+      '[data-cy="modal-close-button"]',
+      '.cc-close-button-component',
+      '#live_ShareMenuGlobalDialogCloseButton',
+      '#chessboard_ShareMenuGlobalDialogCloseButton',
+      'button.ui_outside-close-component'
     ]
   } as const;
+
+  const FINISHED_RESULTS = new Set(['1-0', '0-1', '1/2-1/2']);
+  const INTERACTION_TIMEOUT_MS = 5000;
 
   type ChessComResponse = GetStatusResponse | OperationResponse;
 
@@ -45,8 +82,139 @@
     );
   }
 
+  function isVisible(element: Element): boolean {
+    if (!(element instanceof HTMLElement)) {
+      return true;
+    }
+
+    const style = window.getComputedStyle(element);
+
+    if (style.display === 'none' || style.visibility === 'hidden') {
+      return false;
+    }
+
+    return element.getClientRects().length > 0;
+  }
+
+  function getControlLabel(element: Element): string {
+    return [
+      element.textContent,
+      element.getAttribute('aria-label'),
+      element.getAttribute('title'),
+      element.getAttribute('data-cy')
+    ]
+      .filter((value): value is string => typeof value === 'string')
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function findVisibleControl(
+    selectors: readonly string[],
+    root: ParentNode = document
+  ): HTMLElement | null {
+    for (const selector of selectors) {
+      try {
+        for (const element of root.querySelectorAll<HTMLElement>(selector)) {
+          if (isVisible(element)) {
+            return element;
+          }
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    return null;
+  }
+
+  function findSemanticControl(
+    labelPattern: RegExp,
+    root: ParentNode = document
+  ): HTMLElement | null {
+    const candidates = root.querySelectorAll<HTMLElement>(
+      'button, [role="button"], a[role="button"], [role="tab"]'
+    );
+
+    for (const candidate of candidates) {
+      if (isVisible(candidate) && labelPattern.test(getControlLabel(candidate))) {
+        return candidate;
+      }
+    }
+
+    return null;
+  }
+
+  function findShareButton(): HTMLElement | null {
+    return findVisibleControl(SELECTORS.shareButtons) ?? findSemanticControl(/^share(?: game)?$/i);
+  }
+
+  function findSecondaryMenuButton(): HTMLElement | null {
+    return findVisibleControl(SELECTORS.secondaryMenuButtons);
+  }
+
+  function findPgnTextarea(): HTMLTextAreaElement | null {
+    for (const selector of SELECTORS.pgnTextareas) {
+      for (const textarea of document.querySelectorAll<HTMLTextAreaElement>(selector)) {
+        if (isVisible(textarea)) {
+          return textarea;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  function getBoardOrientation(): BoardOrientation {
+    const boardSelectors = [
+      'wc-chess-board',
+      'chess-board',
+      '[data-cy="chessboard"]',
+      '.board'
+    ];
+
+    for (const selector of boardSelectors) {
+      for (const board of document.querySelectorAll<HTMLElement>(selector)) {
+        if (!isVisible(board)) {
+          continue;
+        }
+
+        const explicitOrientation =
+          board.getAttribute('data-orientation') ?? board.getAttribute('orientation');
+
+        if (
+          board.classList.contains('flipped') ||
+          board.getAttribute('data-flipped') === 'true' ||
+          explicitOrientation?.toLowerCase() === 'black'
+        ) {
+          return 'black';
+        }
+
+        return 'white';
+      }
+    }
+
+    return 'white';
+  }
+
+  function findShareModal(): HTMLElement | null {
+    const explicitModal = findVisibleControl(SELECTORS.shareModals);
+
+    if (explicitModal) {
+      return explicitModal;
+    }
+
+    const pgnElement = findPgnTextarea() ?? findVisibleControl(SELECTORS.pgnTabs);
+    return pgnElement?.closest<HTMLElement>('dialog, [role="dialog"], [class*="modal"]') ?? null;
+  }
+
+  function extractGameId(pathname = window.location.pathname): string | null {
+    const match = pathname.match(/\/(?:analysis\/)?game\/(?:[a-z-]+\/)?(\d+)/i);
+    return match?.[1] ?? null;
+  }
+
   function isReady(): boolean {
-    return document.querySelector(SELECTORS.shareButton) !== null;
+    return findPgnTextarea() !== null || findShareButton() !== null;
   }
 
   function wait(milliseconds: number): Promise<void> {
@@ -55,23 +223,28 @@
     });
   }
 
-  async function waitForElement<TElement extends Element>(
-    selector: string,
-    timeoutMs = 5000
-  ): Promise<TElement | null> {
+  async function waitFor<T>(
+    getValue: () => T | null,
+    timeoutMs = INTERACTION_TIMEOUT_MS
+  ): Promise<T | null> {
     const startTime = Date.now();
 
     while (Date.now() - startTime < timeoutMs) {
-      const element = document.querySelector<TElement>(selector);
+      const value = getValue();
 
-      if (element) {
-        return element;
+      if (value !== null) {
+        return value;
       }
 
       await wait(100);
     }
 
     return null;
+  }
+
+  function clickControl(element: HTMLElement): void {
+    element.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    element.click();
   }
 
   async function reportStatus(force = false): Promise<void> {
@@ -100,99 +273,237 @@
     }, 150);
   }
 
-  async function ensureShareModalOpen(): Promise<HTMLElement> {
-    let modal = document.querySelector<HTMLElement>(SELECTORS.shareModal);
+  async function ensureShareModalOpen(): Promise<{
+    modal: HTMLElement | null;
+    openedByExtension: boolean;
+  }> {
+    const existingModal = findShareModal();
 
-    if (modal) {
-      return modal;
+    if (existingModal || findPgnTextarea()) {
+      return { modal: existingModal, openedByExtension: false };
     }
 
-    const shareButton = document.querySelector<HTMLElement>(SELECTORS.shareButton);
+    let shareButton = findShareButton();
 
     if (!shareButton) {
-      throw new Error('Share button was not found on this Chess.com page.');
+      const secondaryMenuButton = findSecondaryMenuButton();
+
+      if (secondaryMenuButton) {
+        clickControl(secondaryMenuButton);
+        shareButton = await waitFor(findShareButton, 2000);
+      }
     }
 
-    shareButton.click();
-    modal = await waitForElement<HTMLElement>(SELECTORS.shareModal, 5000);
+    if (!shareButton) {
+      throw new Error('Share button was not found on this Chess.com game page.');
+    }
+
+    clickControl(shareButton);
+
+    const modal = await waitFor(() => findShareModal() ?? findPgnTextarea());
 
     if (!modal) {
-      throw new Error('Share modal did not open.');
+      throw new Error('Share dialog did not open.');
     }
 
-    return modal;
+    return {
+      modal: modal instanceof HTMLTextAreaElement ? findShareModal() : modal,
+      openedByExtension: true
+    };
   }
 
-  async function ensurePgnTabOpen(): Promise<HTMLTextAreaElement> {
-    const pgnTab = await waitForElement<HTMLElement>(SELECTORS.pgnTab, 5000);
-
-    if (!pgnTab) {
-      throw new Error('PGN tab was not found in the share modal.');
-    }
-
-    if (pgnTab.getAttribute('aria-selected') !== 'true') {
-      pgnTab.click();
-    }
-
-    const pgnTextarea = await waitForElement<HTMLTextAreaElement>(SELECTORS.pgnTextarea, 5000);
-
-    if (!pgnTextarea) {
-      throw new Error('PGN text field was not found.');
-    }
-
-    return pgnTextarea;
+  function findPgnTab(root: ParentNode = document): HTMLElement | null {
+    return findVisibleControl(SELECTORS.pgnTabs, root) ?? findSemanticControl(/^pgn$/i, root);
   }
 
-  async function extractPgn(): Promise<string> {
-    await ensureShareModalOpen();
-    const pgnTextarea = await ensurePgnTabOpen();
-    const pgn = pgnTextarea.value.trim();
-
-    if (!pgn) {
-      throw new Error('PGN text was empty.');
-    }
-
-    return pgn;
+  function readTextareaValue(textarea: HTMLTextAreaElement): string {
+    return (
+      textarea.value ||
+      textarea.getAttribute('value') ||
+      textarea.textContent ||
+      ''
+    ).trim();
   }
 
-  async function closeShareModal(): Promise<void> {
-    const modal = document.querySelector<HTMLElement>(SELECTORS.shareModal);
+  function findPgnValue(): string | null {
+    const textarea = findPgnTextarea();
 
-    if (!modal) {
-      return;
+    if (textarea) {
+      const value = readTextareaValue(textarea);
+
+      if (value) {
+        return value;
+      }
     }
 
-    for (const selector of SELECTORS.modalCloseButtons) {
-      const closeButton = document.querySelector<HTMLElement>(selector);
+    const attributeRoot: ParentNode = findShareModal() ?? document;
 
-      if (!closeButton) {
+    for (const element of attributeRoot.querySelectorAll<HTMLElement>('[pgn], [data-pgn]')) {
+      if (attributeRoot === document && !isVisible(element)) {
         continue;
       }
 
-      closeButton.click();
+      const value = element.getAttribute('pgn') ?? element.getAttribute('data-pgn');
 
-      const modalStillOpen = await waitForElement<HTMLElement>(SELECTORS.shareModal, 400);
+      if (value?.trim()) {
+        return value.trim();
+      }
+    }
 
-      if (!modalStillOpen) {
+    return null;
+  }
+
+  async function ensurePgnVisible(modal: HTMLElement | null): Promise<void> {
+    if (findPgnValue()) {
+      return;
+    }
+
+    const root: ParentNode = modal ?? document;
+    const pgnTab = await waitFor(() => findPgnTab(root));
+
+    if (!pgnTab) {
+      throw new Error('PGN tab was not found in the Share dialog.');
+    }
+
+    if (pgnTab.getAttribute('aria-selected') !== 'true') {
+      clickControl(pgnTab);
+    }
+
+    const pgn = await waitFor(findPgnValue);
+
+    if (!pgn) {
+      throw new Error('PGN text was not found in the Share dialog.');
+    }
+  }
+
+  function getPgnFromCallbackPayload(value: unknown): string | null {
+    if (!isRecord(value) || !isRecord(value.game)) {
+      return null;
+    }
+
+    return typeof value.game.pgn === 'string' && value.game.pgn.trim()
+      ? value.game.pgn.trim()
+      : null;
+  }
+
+  async function fetchPgnFromChessCom(gameId: string): Promise<string> {
+    const pathKind = window.location.pathname.match(/\/game\/(live|daily)\//i)?.[1]?.toLowerCase();
+    const gameKinds = pathKind
+      ? [pathKind, ...['live', 'daily'].filter(kind => kind !== pathKind)]
+      : ['live', 'daily'];
+
+    for (const gameKind of gameKinds) {
+      try {
+        const response = await fetch(`/callback/${gameKind}/game/${encodeURIComponent(gameId)}`, {
+          credentials: 'include',
+          headers: { Accept: 'application/json' }
+        });
+
+        if (!response.ok) {
+          continue;
+        }
+
+        const pgn = getPgnFromCallbackPayload(await response.json());
+
+        if (pgn) {
+          return pgn;
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    throw new Error('Chess.com did not provide a PGN for this game.');
+  }
+
+  function validateCompletedPgn(pgn: string): string {
+    const normalizedPgn = pgn.replace(/\r\n?/g, '\n').trim();
+    const result = normalizedPgn.match(/^\[Result\s+"([^"]+)"\]\s*$/im)?.[1];
+
+    if (!result || !FINISHED_RESULTS.has(result)) {
+      throw new Error(
+        'This game is not finished yet. Lichess analysis is only available after the game ends.'
+      );
+    }
+
+    return normalizedPgn;
+  }
+
+  async function extractPgn(): Promise<string> {
+    const existingPgn = findPgnValue();
+
+    if (existingPgn) {
+      return validateCompletedPgn(existingPgn);
+    }
+
+    let openedByExtension = false;
+
+    try {
+      const shareDialog = await ensureShareModalOpen();
+      openedByExtension = shareDialog.openedByExtension;
+      await ensurePgnVisible(shareDialog.modal);
+
+      const pgn = findPgnValue();
+
+      if (!pgn) {
+        throw new Error('PGN text was empty.');
+      }
+
+      return validateCompletedPgn(pgn);
+    } catch (shareError) {
+      const gameId = extractGameId();
+
+      if (!gameId) {
+        throw shareError;
+      }
+
+      return validateCompletedPgn(await fetchPgnFromChessCom(gameId));
+    } finally {
+      if (openedByExtension) {
+        await closeShareModal();
+      }
+    }
+  }
+
+  async function closeShareModal(): Promise<void> {
+    const modal = findShareModal();
+
+    if (!modal && !findPgnTextarea()) {
+      return;
+    }
+
+    const root: ParentNode = modal ?? document;
+
+    for (const selector of SELECTORS.modalCloseButtons) {
+      const closeButton =
+        root.querySelector<HTMLElement>(selector) ?? document.querySelector<HTMLElement>(selector);
+
+      if (!closeButton || !isVisible(closeButton)) {
+        continue;
+      }
+
+      clickControl(closeButton);
+      await wait(100);
+
+      if (!findShareModal()) {
         return;
       }
     }
 
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', bubbles: true }));
-
     await wait(100);
   }
 
   async function startImport(): Promise<void> {
+    const orientation = getBoardOrientation();
     const pgn = await extractPgn();
-
-    await closeShareModal();
 
     const response: unknown = await chrome.runtime.sendMessage({
       type: 'OPEN_LICHESS_IMPORT',
       pgn,
-      sourceUrl: window.location.href
+      sourceUrl: window.location.href,
+      orientation
     } satisfies OpenLichessImportMessage);
 
     if (isOperationResponse(response) && response.ok) {
@@ -240,7 +551,8 @@
   observer.observe(document.documentElement, {
     childList: true,
     subtree: true,
-    attributes: true
+    attributes: true,
+    attributeFilter: ['class', 'aria-hidden', 'aria-selected']
   });
 
   void reportStatus(true);

@@ -20,7 +20,7 @@
         if (!url) {
             return false;
         }
-        return /^https:\/\/www\.chess\.com\/game(?:\/live)?\//.test(url);
+        return /^https:\/\/www\.chess\.com\/(?:analysis\/)?game(?:\/(?:live|daily))?\//.test(url);
     }
     function isMissingReceiverError(error) {
         return /receiving end does not exist/i.test(getErrorMessage(error, ''));
@@ -35,7 +35,8 @@
         return (isRecord(message) &&
             message.type === 'OPEN_LICHESS_IMPORT' &&
             typeof message.pgn === 'string' &&
-            typeof message.sourceUrl === 'string');
+            typeof message.sourceUrl === 'string' &&
+            (message.orientation === 'white' || message.orientation === 'black'));
     }
     function isGetPendingImportMessage(message) {
         return (isRecord(message) &&
@@ -51,6 +52,12 @@
         return (isRecord(value) &&
             typeof value.pgn === 'string' &&
             typeof value.sourceUrl === 'string' &&
+            typeof value.createdAt === 'number' &&
+            (value.orientation === 'white' || value.orientation === 'black'));
+    }
+    function isPendingTabOrientation(value) {
+        return (isRecord(value) &&
+            (value.orientation === 'white' || value.orientation === 'black') &&
             typeof value.createdAt === 'number');
     }
     function isGetStatusResponse(response) {
@@ -63,6 +70,24 @@
     }
     function getPendingImportStorageKey(importId) {
         return `pending-import:${importId}`;
+    }
+    function getPendingOrientationStorageKey(tabId) {
+        return `pending-orientation:${tabId}`;
+    }
+    function getOrientedLichessUrl(url, orientation) {
+        if (orientation !== 'black') {
+            return null;
+        }
+        const parsedUrl = new URL(url);
+        if (parsedUrl.origin !== 'https://lichess.org') {
+            return null;
+        }
+        const pathMatch = parsedUrl.pathname.match(/^(\/(?:game\/)?[a-zA-Z0-9]{8})(?:\/(white|black))?\/?$/);
+        if (!pathMatch || pathMatch[2] === 'black') {
+            return null;
+        }
+        parsedUrl.pathname = `${pathMatch[1]}/black`;
+        return parsedUrl.toString();
     }
     async function ignoreMissingTabError(callback) {
         try {
@@ -198,7 +223,34 @@
         if (!changeInfo.url && changeInfo.status !== 'complete') {
             return;
         }
-        await refreshTabStatus(tabId, changeInfo.url ?? tab.url);
+        const url = changeInfo.url ?? tab.url;
+        await Promise.all([refreshTabStatus(tabId, url), applyPendingLichessOrientation(tabId, url)]);
+    }
+    async function applyPendingLichessOrientation(tabId, url) {
+        if (!url || url.startsWith(LICHESS_PASTE_URL)) {
+            return;
+        }
+        const storageKey = getPendingOrientationStorageKey(tabId);
+        const stored = (await chrome.storage.session.get(storageKey))[storageKey];
+        if (!isPendingTabOrientation(stored) || Date.now() - stored.createdAt > 120_000) {
+            if (stored !== undefined) {
+                await chrome.storage.session.remove(storageKey);
+            }
+            return;
+        }
+        const orientedUrl = getOrientedLichessUrl(url, stored.orientation);
+        if (!orientedUrl) {
+            const parsedUrl = new URL(url);
+            const isGameUrl = parsedUrl.origin === 'https://lichess.org' &&
+                /^(\/(?:game\/)?[a-zA-Z0-9]{8})(?:\/(?:white|black))?\/?$/.test(parsedUrl.pathname);
+            const isAlreadyOriented = isGameUrl && /\/black\/?$/.test(parsedUrl.pathname);
+            if (stored.orientation === 'white' || !isGameUrl || isAlreadyOriented) {
+                await chrome.storage.session.remove(storageKey);
+            }
+            return;
+        }
+        await chrome.storage.session.remove(storageKey);
+        await ignoreMissingTabError(() => chrome.tabs.update(tabId, { url: orientedUrl }));
     }
     async function handleOpenLichessImportMessage(message) {
         const importId = crypto.randomUUID();
@@ -206,14 +258,21 @@
         const pendingImport = {
             pgn: message.pgn,
             sourceUrl: message.sourceUrl,
-            createdAt: Date.now()
+            createdAt: Date.now(),
+            orientation: message.orientation
         };
         await chrome.storage.session.set({
             [storageKey]: pendingImport
         });
-        await chrome.tabs.create({
-            url: `${LICHESS_PASTE_URL}#chesscom-import=${encodeURIComponent(importId)}`
-        });
+        try {
+            await chrome.tabs.create({
+                url: `${LICHESS_PASTE_URL}#chesscom-import=${encodeURIComponent(importId)}`
+            });
+        }
+        catch (error) {
+            await chrome.storage.session.remove(storageKey);
+            throw error;
+        }
         return { ok: true };
     }
     async function handleGetPendingImportMessage(message) {
@@ -233,12 +292,23 @@
         }
         return { ok: true, pendingImport };
     }
-    async function handleClearPendingImportMessage(message) {
+    async function handleClearPendingImportMessage(message, sender) {
         const importId = message.importId.trim();
         if (!importId) {
             return { ok: false, error: 'Missing import id.' };
         }
-        await chrome.storage.session.remove(getPendingImportStorageKey(importId));
+        const storageKey = getPendingImportStorageKey(importId);
+        const pendingImport = (await chrome.storage.session.get(storageKey))[storageKey];
+        const tabId = sender.tab?.id;
+        if (typeof tabId === 'number' && isPendingImport(pendingImport)) {
+            const orientationKey = getPendingOrientationStorageKey(tabId);
+            const pendingOrientation = {
+                orientation: pendingImport.orientation,
+                createdAt: Date.now()
+            };
+            await chrome.storage.session.set({ [orientationKey]: pendingOrientation });
+        }
+        await chrome.storage.session.remove(storageKey);
         return { ok: true };
     }
     async function handleRuntimeMessage(message, sender) {
@@ -262,7 +332,7 @@
             return handleGetPendingImportMessage(message);
         }
         if (isClearPendingImportMessage(message)) {
-            return handleClearPendingImportMessage(message);
+            return handleClearPendingImportMessage(message, sender);
         }
         return { ok: false, error: 'Unsupported message.' };
     }
@@ -296,7 +366,7 @@
             const errorMessage = isOperationResponse(response) && response.error
                 ? response.error
                 : 'Could not extract PGN from the page';
-            if (/share button was not found|share modal did not open|pgn tab was not found|pgn text field was not found|pgn text was empty/i.test(errorMessage)) {
+            if (/share button was not found|share dialog did not open|pgn tab was not found|pgn text was not found|pgn text was empty|game is not finished|did not provide a pgn/i.test(errorMessage)) {
                 await setRetryBadge(tab.id, errorMessage);
                 return;
             }
@@ -304,7 +374,7 @@
         }
         catch (error) {
             const errorMessage = getErrorMessage(error, 'Could not reach the Chess.com page');
-            if (/share button was not found|share modal did not open|pgn tab was not found|pgn text field was not found|pgn text was empty/i.test(errorMessage)) {
+            if (/share button was not found|share dialog did not open|pgn tab was not found|pgn text was not found|pgn text was empty|game is not finished|did not provide a pgn/i.test(errorMessage)) {
                 await setRetryBadge(tab.id, errorMessage);
                 return;
             }

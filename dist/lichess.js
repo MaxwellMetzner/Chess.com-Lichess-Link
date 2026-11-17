@@ -1,8 +1,11 @@
 "use strict";
 (() => {
     const HASH_PREFIX = '#chesscom-import=';
-    const PGN_TEXTAREA_SELECTOR = 'textarea[name="pgn"]';
-    const IMPORT_FORM_SELECTOR = 'main form[action="/import"]';
+    const PGN_TEXTAREA_SELECTORS = [
+        'textarea[name="pgn"]',
+        'textarea[aria-label*="PGN" i]',
+        'main textarea'
+    ];
     function isRecord(value) {
         return typeof value === 'object' && value !== null;
     }
@@ -10,7 +13,8 @@
         return (isRecord(value) &&
             typeof value.pgn === 'string' &&
             typeof value.sourceUrl === 'string' &&
-            typeof value.createdAt === 'number');
+            typeof value.createdAt === 'number' &&
+            (value.orientation === 'white' || value.orientation === 'black'));
     }
     function isGetPendingImportResponse(response) {
         if (!isRecord(response) || typeof response.ok !== 'boolean') {
@@ -32,16 +36,33 @@
             window.setTimeout(resolve, milliseconds);
         });
     }
-    async function waitForElement(selector, timeoutMs = 5000) {
+    async function waitForPgnTextarea(timeoutMs = 5000) {
         const startTime = Date.now();
         while (Date.now() - startTime < timeoutMs) {
-            const element = document.querySelector(selector);
-            if (element) {
-                return element;
+            for (const selector of PGN_TEXTAREA_SELECTORS) {
+                const textarea = document.querySelector(selector);
+                if (textarea) {
+                    return textarea;
+                }
             }
             await wait(100);
         }
         return null;
+    }
+    function findImportForm(textarea) {
+        return (textarea.closest('form') ??
+            Array.from(document.forms).find(form => form.contains(textarea)) ??
+            null);
+    }
+    function findSubmitter(form) {
+        const candidates = form.querySelectorAll('button[type="submit"], input[type="submit"]');
+        for (const candidate of candidates) {
+            const label = `${candidate.textContent ?? ''} ${candidate.value} ${candidate.getAttribute('aria-label') ?? ''}`;
+            if (/import/i.test(label)) {
+                return candidate;
+            }
+        }
+        return candidates[0];
     }
     function setTextareaValue(textarea, value) {
         const valueSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
@@ -60,9 +81,12 @@
             if (!importId) {
                 return;
             }
-            const form = await waitForElement(IMPORT_FORM_SELECTOR, 5000);
-            const textarea = await waitForElement(PGN_TEXTAREA_SELECTOR, 5000);
-            if (!form || !textarea) {
+            const textarea = await waitForPgnTextarea(5000);
+            if (!textarea) {
+                return;
+            }
+            const form = findImportForm(textarea);
+            if (!form) {
                 return;
             }
             const response = await chrome.runtime.sendMessage({
@@ -78,7 +102,7 @@
                 importId
             });
             window.history.replaceState({}, document.title, window.location.pathname);
-            form.requestSubmit();
+            form.requestSubmit(findSubmitter(form));
         }
         catch {
             return;
